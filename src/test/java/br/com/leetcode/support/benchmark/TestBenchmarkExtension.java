@@ -18,7 +18,7 @@ import java.util.Map;
 
 /**
  * JUnit 5 Extension that captures execution wall time, CPU time, and thread-allocated heap memory.
- * Emits individual test banners and a consolidated leaderboard table upon class execution completion.
+ * Emits individual test banners and a consolidated, sanitized leaderboard table upon class execution completion.
  */
 public class TestBenchmarkExtension implements BeforeTestExecutionCallback, AfterTestExecutionCallback, AfterAllCallback {
 
@@ -27,6 +27,15 @@ public class TestBenchmarkExtension implements BeforeTestExecutionCallback, Afte
 
     private static final String CLASS_ENTRIES_KEY = "BENCHMARK_CLASS_ENTRIES";
     private static final int LEADERBOARD_WIDTH = 112;
+
+    private static final String ANSI_RESET = "\u001B[0m";
+    private static final String ANSI_BOLD = "\u001B[1m";
+    private static final String ANSI_GREEN = "\u001B[32m";
+    private static final String ANSI_BRIGHT_GREEN = "\u001B[92m";
+    private static final String ANSI_CYAN = "\u001B[36m";
+    private static final String ANSI_BLUE = "\u001B[34m";
+    private static final String ANSI_YELLOW = "\u001B[33m";
+    private static final String ANSI_BRIGHT_RED = "\u001B[91m";
 
     private static final ThreadMXBean THREAD_MX_BEAN = ManagementFactory.getThreadMXBean();
     private static final com.sun.management.ThreadMXBean SUN_THREAD_MX_BEAN = initSunThreadMxBean();
@@ -78,28 +87,43 @@ public class TestBenchmarkExtension implements BeforeTestExecutionCallback, Afte
         BenchmarkMetrics metrics = new BenchmarkMetrics(elapsedWallNanos, elapsedCpuNanos, allocatedBytes);
 
         BenchmarkTest config = findBenchmarkConfig(context);
-        boolean slaViolated = config != null
+        boolean timeSlaViolated = config != null
                 && config.maxTimeMillis() > 0
                 && metrics.elapsedTimeMillis() > config.maxTimeMillis();
+
+        boolean memorySlaViolated = config != null
+                && config.maxMemoryBytes() >= 0
+                && metrics.allocatedBytes() >= 0
+                && metrics.allocatedBytes() > config.maxMemoryBytes();
 
         String testName = resolveSemanticTestName(context);
 
         // Record entry for the class-level leaderboard in root store
-        getClassEntries(context).add(new BenchmarkEntry(testName, metrics, slaViolated));
+        getClassEntries(context).add(new BenchmarkEntry(testName, metrics, timeSlaViolated, memorySlaViolated));
 
         boolean printToConsole = config == null || config.printToConsole();
         if (printToConsole) {
-            printReport(testName, metrics, config, slaViolated);
+            printReport(testName, metrics, config, timeSlaViolated, memorySlaViolated);
         }
 
-        publishReport(context, testName, metrics, slaViolated);
+        publishReport(context, testName, metrics, timeSlaViolated, memorySlaViolated);
 
-        if (slaViolated && config.failOnSlaViolation()) {
+        if (timeSlaViolated && config.failOnSlaViolation()) {
             throw new AssertionError(String.format(
                     Locale.ROOT,
                     "Execution time of %.2f ms exceeded SLA threshold of %d ms for test '%s'",
                     metrics.elapsedTimeMillis(),
                     config.maxTimeMillis(),
+                    testName
+            ));
+        }
+
+        if (memorySlaViolated && config.failOnMemoryViolation()) {
+            throw new AssertionError(String.format(
+                    Locale.ROOT,
+                    "Allocated memory of %s exceeded SLA threshold of %,d bytes for test '%s'",
+                    metrics.formatAllocatedMemory(),
+                    config.maxMemoryBytes(),
                     testName
             ));
         }
@@ -123,11 +147,23 @@ public class TestBenchmarkExtension implements BeforeTestExecutionCallback, Afte
                 return;
             }
 
-            List<BenchmarkEntry> sorted = new ArrayList<>(entries);
+            boolean excludeWarmup = config == null || config.excludeWarmup();
+            List<BenchmarkEntry> sorted = new ArrayList<>();
+            for (BenchmarkEntry entry : entries) {
+                if (excludeWarmup && entry.isWarmup()) {
+                    continue;
+                }
+                sorted.add(entry);
+            }
+
+            if (sorted.isEmpty()) {
+                return;
+            }
+
             sorted.sort(Comparator.comparingLong(e -> e.metrics().elapsedTimeNanos()));
 
             String className = context.getRequiredTestClass().getSimpleName();
-            printLeaderboard(className, sorted);
+            printLeaderboard(className, sorted, config);
         } finally {
             context.getRoot().getStore(classNamespace).remove(CLASS_ENTRIES_KEY);
         }
@@ -188,7 +224,13 @@ public class TestBenchmarkExtension implements BeforeTestExecutionCallback, Afte
         return context.getStore(TEST_NAMESPACE);
     }
 
-    private void printReport(String testName, BenchmarkMetrics metrics, BenchmarkTest config, boolean slaViolated) {
+    private void printReport(
+            String testName,
+            BenchmarkMetrics metrics,
+            BenchmarkTest config,
+            boolean timeSlaViolated,
+            boolean memorySlaViolated) {
+
         var sb = new StringBuilder();
         sb.append("------------------------------------------------------------------------\n");
         sb.append(String.format("[BENCHMARK] Test: %s\n", testName));
@@ -196,19 +238,30 @@ public class TestBenchmarkExtension implements BeforeTestExecutionCallback, Afte
         sb.append(String.format("- CPU Time:     %s\n", metrics.formatCpuTime()));
         sb.append(String.format("- Memory Alloc: %s\n", metrics.formatAllocatedMemory()));
 
-        if (slaViolated && config != null) {
+        if (timeSlaViolated && config != null) {
             sb.append(String.format(
                     Locale.ROOT,
-                    "- [!] SLA VIOLATION: Elapsed %.2f ms exceeded threshold of %d ms (TLE Risk)\n",
+                    "- [!] TIME SLA VIOLATION: Elapsed %.2f ms exceeded threshold of %d ms (TLE Risk)\n",
                     metrics.elapsedTimeMillis(),
                     config.maxTimeMillis()
             ));
         }
+
+        if (memorySlaViolated && config != null) {
+            sb.append(String.format(
+                    Locale.ROOT,
+                    "- [!] MEMORY SLA VIOLATION: Allocated %s exceeded threshold of %,d bytes (MLE Risk)\n",
+                    metrics.formatAllocatedMemory(),
+                    config.maxMemoryBytes()
+            ));
+        }
+
         sb.append("------------------------------------------------------------------------");
         System.out.println(sb);
     }
 
-    private void printLeaderboard(String className, List<BenchmarkEntry> entries) {
+    private void printLeaderboard(String className, List<BenchmarkEntry> entries, BenchmarkTest config) {
+        boolean useAnsi = config == null || config.ansiColors();
         String border = "=".repeat(LEADERBOARD_WIDTH);
         String divider = "-".repeat(LEADERBOARD_WIDTH);
 
@@ -222,19 +275,53 @@ public class TestBenchmarkExtension implements BeforeTestExecutionCallback, Afte
 
         for (int i = 0; i < entries.size(); i++) {
             BenchmarkEntry entry = entries.get(i);
-            String rank = "#" + (i + 1);
+            String plainRank = "#" + (i + 1);
+            String paddedRank = String.format(Locale.ROOT, "%-5s", plainRank);
+            String displayRank = useAnsi ? colorizeRank(paddedRank, i + 1) : paddedRank;
+
             String testName = truncate(entry.testName(), 44);
             String elapsed = entry.metrics().formatShortElapsedTime();
             String cpu = entry.metrics().formatShortCpuTime();
             String mem = entry.metrics().formatShortAllocatedMemory();
-            String sla = entry.slaViolated() ? "FAIL" : "OK";
 
-            sb.append(String.format(Locale.ROOT, "%-5s | %-44s | %-14s | %-14s | %-14s | %-6s\n",
-                    rank, testName, elapsed, cpu, mem, sla));
+            String plainSla = resolveSlaLabel(entry);
+            String paddedSla = String.format(Locale.ROOT, "%-6s", plainSla);
+            String displaySla = useAnsi ? colorizeSla(paddedSla, plainSla) : paddedSla;
+
+            sb.append(String.format(Locale.ROOT, "%s | %-44s | %-14s | %-14s | %-14s | %s\n",
+                    displayRank, testName, elapsed, cpu, mem, displaySla));
         }
 
         sb.append(border).append("\n");
         System.out.println(sb);
+    }
+
+    private static String resolveSlaLabel(BenchmarkEntry entry) {
+        if (!entry.isAnySlaViolated()) {
+            return "OK";
+        }
+        if (entry.slaViolated() && entry.memoryViolated()) {
+            return "FAIL";
+        }
+        return entry.slaViolated() ? "TLE" : "MLE";
+    }
+
+    private static String colorizeRank(String paddedRank, int rank) {
+        return switch (rank) {
+            case 1 -> ANSI_BOLD + ANSI_BRIGHT_GREEN + paddedRank + ANSI_RESET;
+            case 2 -> ANSI_BOLD + ANSI_CYAN + paddedRank + ANSI_RESET;
+            case 3 -> ANSI_BOLD + ANSI_BLUE + paddedRank + ANSI_RESET;
+            default -> paddedRank;
+        };
+    }
+
+    private static String colorizeSla(String paddedSla, String plainSla) {
+        return switch (plainSla) {
+            case "OK" -> ANSI_GREEN + paddedSla + ANSI_RESET;
+            case "TLE", "FAIL" -> ANSI_BOLD + ANSI_BRIGHT_RED + paddedSla + ANSI_RESET;
+            case "MLE" -> ANSI_BOLD + ANSI_YELLOW + paddedSla + ANSI_RESET;
+            default -> paddedSla;
+        };
     }
 
     private static String truncate(String text, int maxLength) {
@@ -244,14 +331,23 @@ public class TestBenchmarkExtension implements BeforeTestExecutionCallback, Afte
         return text.substring(0, maxLength - 3) + "...";
     }
 
-    private void publishReport(ExtensionContext context, String testName, BenchmarkMetrics metrics, boolean slaViolated) {
+    private void publishReport(
+            ExtensionContext context,
+            String testName,
+            BenchmarkMetrics metrics,
+            boolean timeSlaViolated,
+            boolean memorySlaViolated) {
+
         Map<String, String> entries = new HashMap<>();
         entries.put("test", testName);
         entries.put("elapsedTime", metrics.formatElapsedTime());
         entries.put("cpuTime", metrics.formatCpuTime());
         entries.put("allocatedMemory", metrics.formatAllocatedMemory());
-        if (slaViolated) {
-            entries.put("slaStatus", "VIOLATED");
+        if (timeSlaViolated) {
+            entries.put("timeSlaStatus", "VIOLATED");
+        }
+        if (memorySlaViolated) {
+            entries.put("memorySlaStatus", "VIOLATED");
         }
         context.publishReportEntry(entries);
     }

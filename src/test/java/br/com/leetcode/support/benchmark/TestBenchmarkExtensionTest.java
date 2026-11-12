@@ -100,6 +100,32 @@ class TestBenchmarkExtensionTest {
     }
 
     @Nested
+    @DisplayName("BenchmarkEntry Unit Tests")
+    class BenchmarkEntryTests {
+
+        @Test
+        @DisplayName("Should correctly classify warmup and SLA violations")
+        void shouldClassifyEntryProperties() {
+            var metrics = new BenchmarkMetrics(1_000_000, 500_000, 1024);
+
+            var normalEntry = new BenchmarkEntry("P1TwoSumTest.example1", metrics, false, false);
+            assertThat(normalEntry.isWarmup()).isFalse();
+            assertThat(normalEntry.isAnySlaViolated()).isFalse();
+
+            var warmupEntry = new BenchmarkEntry("P1TwoSumTest.measureComplexity [\"Warmup (N = 20,000)\"]", metrics, false, false);
+            assertThat(warmupEntry.isWarmup()).isTrue();
+
+            var timeViolatedEntry = new BenchmarkEntry("P1TwoSumTest.load", metrics, true, false);
+            assertThat(timeViolatedEntry.isAnySlaViolated()).isTrue();
+            assertThat(timeViolatedEntry.slaViolated()).isTrue();
+
+            var memoryViolatedEntry = new BenchmarkEntry("P1TwoSumTest.memoryHeavy", metrics, false, true);
+            assertThat(memoryViolatedEntry.isAnySlaViolated()).isTrue();
+            assertThat(memoryViolatedEntry.memoryViolated()).isTrue();
+        }
+    }
+
+    @Nested
     @BenchmarkTest
     @DisplayName("Extension Integration Execution")
     class ExtensionIntegrationTest {
@@ -133,6 +159,17 @@ class TestBenchmarkExtensionTest {
         void shouldFlagSlaWarningWithoutFailing() throws InterruptedException {
             Thread.sleep(10);
             assertThat(true).isTrue();
+        }
+
+        @Test
+        @BenchmarkTest(maxMemoryBytes = 100, failOnMemoryViolation = false)
+        @DisplayName("Should flag memory SLA warning without failing test when threshold is exceeded")
+        void shouldFlagMemorySlaWarningWithoutFailing() {
+            List<String> list = new ArrayList<>();
+            for (int i = 0; i < 500; i++) {
+                list.add("MemoryItem-" + i);
+            }
+            assertThat(list).hasSize(500);
         }
     }
 }

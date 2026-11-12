@@ -32,6 +32,28 @@ public @interface BenchmarkTest {
     boolean failOnSlaViolation() default false;
 
     /**
+     * Maximum tolerated heap memory allocation in bytes before flagging an SLA violation.
+     * Default is -1 (disabled).
+     */
+    long maxMemoryBytes() default -1;
+
+    /**
+     * Whether to fail the test execution when the allocated memory exceeds maxMemoryBytes.
+     * If false, logs a visible warning banner instead of failing.
+     */
+    boolean failOnMemoryViolation() default false;
+
+    /**
+     * Whether to exclude warmup invocations from the final summary leaderboard table.
+     */
+    boolean excludeWarmup() default true;
+
+    /**
+     * Whether to use ANSI terminal colors in the console output for IDEs and modern terminals.
+     */
+    boolean ansiColors() default true;
+
+    /**
      * Whether to print the formatted benchmark banner to System.out for individual tests.
      */
     boolean printToConsole() default true;

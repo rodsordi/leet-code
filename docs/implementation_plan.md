@@ -1,62 +1,50 @@
-# Plano de Implementação: Infraestrutura de Perfil e Asserção de Memória (@MemoryProfileTest)
+# Plano de Implementação: Higienização do Leaderboard, Cores ANSI e SLA de Memória no Benchmark
 
-> **Decisão do Usuário**: Opção 1 - Anotação Declarativa @MemoryProfileTest (Zero-Allocation & Complexidade Espacial)
+> **Decisão do Usuário**: Opção 1 - Higienização do Leaderboard, Cores ANSI & SLA de Memória
 > **Status**: Aprovado para Execução
 
 ---
 
 ## 1. Visão Geral e Objetivos
-O objetivo desta demanda é fornecer uma infraestrutura nativa e declarativa no JUnit 5 para metrificação, perfil e asserção de consumo de memória Heap na JVM (`br.com.leetcode.support.memory`).
+O objetivo desta demanda é aprimorar a infraestrutura de medição e relatórios de benchmark (`br.com.leetcode.support.benchmark`), aumentando a clareza e diagnóstico para estudos de algoritmos.
 
-A ferramenta atenderá diretamente a problemas como o **Problema 9 (*Palindrome Number*)**, onde o desafio de engenharia é operar com **Zero Alocação no Heap** ($O(1)$ de Espaço Auxiliar com variáveis locais em registradores/pilha), contrastando com implementações ingênuas baseadas em Strings.
-
----
-
-## 2. Componentes Arquiteturais (`br.com.leetcode.support.memory`)
-
-1. **`MemoryAllocation.java` (Enum)**:
-   - `ZERO`: Exatamente 0 bytes alocados no Heap da JVM.
-   - `CONSTANT`: Alocação fixa restrita a um limite configurável em bytes ($O(1)$ espaço auxiliar).
-   - `LINEAR`: Alocação que cresce proporcionalmente ao tamanho de entrada $N$ ($O(N)$ espaço).
-
-2. **`MemoryAssessment.java` (Record)**:
-   - Encapsula medições em bytes alocados, formatação legível (Bytes, KB, MB) e geração do relatório ASCII tabular `EMPIRICAL MEMORY ASSESSMENT REPORT`.
-
-3. **`@MemoryProfileTest` (Anotação Meta-Anotada com `@TestTemplate`)**:
-   - `MemoryAllocation expectedAllocation() default MemoryAllocation.ZERO;`
-   - `long maxAllocatedBytes() default 0L;`
-   - `int initialSize() default 20_000;`
-   - `int steps() default 1;`
-   - `boolean warmup() default true;`
-   - `int warmupIterations() default 15;`
-
-4. **`MemoryProfileTestExtension.java` (Extensão SPI do JUnit 5)**:
-   - Implementa `TestTemplateInvocationContextProvider`.
-   - Suporta métodos sem parâmetros `()` e com parâmetro `(int size)`:
-     - Métodos `()`: Avaliação direta de orçamento de Heap / Zero-Allocation.
-     - Métodos `(int size)`: Avaliação assintótica espacial com sequência de duplicação ($N, 2N, 4N$).
-   - Estabilização JIT via 15 iterações de aquecimento prévio para compilação C2 (HotSpot).
-   - Medição determinística via `com.sun.management.ThreadMXBean.getThreadAllocatedBytes(...)`.
-   - Emissão de relatório tabular no console e asserção contra o orçamento esperado.
+> **Restrição Crítica**: É terminantemente proibido alterar qualquer classe de negócio ou teste em `br.com.leetcode.problemset.*` (preservação integral dos arquivos de estudo do usuário). Todas as modificações residirão estritamente no pacote `br.com.leetcode.support.benchmark.*`.
 
 ---
 
-## 3. Correção de Sanidade no `P9PalindromeNumber.java`
-- Avaliação de caso de borda no algoritmo:
-  - `x = 0`: O número `0` é um palíndromo válido (LeetCode aceita `0` como `true`).
-  - Atualizar condição inicial: números negativos (`x < 0`) e múltiplos de 10 diferentes de zero (`x % 10 == 0 && x != 0`) retornam `false`. O número `0` retorna `true`.
+## 2. Detalhamento Arquitetural das Melhorias
+
+1. **Higienização Inteligente do Leaderboard**:
+   - No `TestBenchmarkExtension`, ignorar automaticamente etapas de aquecimento (`Warmup`) no `Leaderboard` final gerado no `@AfterAll`.
+   - Adicionar atributo opcional na anotação `@BenchmarkTest(excludeWarmup = true)` (padrão: `true`).
+   - As etapas de warmup continuam existindo e cumprindo seu papel de estabilizar o JIT HotSpot, mas não poluem a tabela consolidada de resultados.
+
+2. **Cores ANSI Semânticas no Console (IntelliJ / Terminal Moderno)**:
+   - Adicionar formatação ANSI leve e elegante:
+     - Destaque nos primeiros colocados: 🥇 `#1` (Verde Brilhante / Bold), 🥈 `#2` (Ciano), 🥉 `#3` (Azul).
+     - Status de SLA: `OK` (Verde), `FAIL` (Vermelho Negrito / Bright Red).
+   - Flag de configuração `@BenchmarkTest(ansiColors = true)` com suporte a desativação se necessário.
+
+3. **Suporte Completo a SLA de Memória**:
+   - Expandir a anotação `@BenchmarkTest`:
+     - `long maxMemoryBytes() default -1;`
+     - `boolean failOnMemoryViolation() default false;`
+   - No `TestBenchmarkExtension`:
+     - Avaliar se `metrics.allocatedBytes() > config.maxMemoryBytes()` (quando `maxMemoryBytes > 0`).
+     - Registrar violação de SLA de memória no `BenchmarkEntry` e exibir aviso `[!] MEMORY SLA VIOLATION` no banner e no `Leaderboard`.
+     - Lançar `AssertionError` se `failOnMemoryViolation() == true`.
 
 ---
 
-## 4. Roteiro de Implementação e Verificação
+## 3. Roteiro de Implementação e Verificação
 
-1. Criar o pacote `src/test/java/br/com/leetcode/support/memory/` contendo:
-   - `MemoryAllocation.java`
-   - `MemoryAssessment.java`
-   - `MemoryProfileTest.java`
-   - `MemoryProfileTestExtension.java`
-2. Criar testes unitários da extensão:
-   - `src/test/java/br/com/leetcode/support/memory/MemoryProfileTestExtensionTest.java`
-3. Ajustar `P9PalindromeNumber.java` (caso `x = 0`) e `P9PalindromeNumberTest.java` (usando `@MemoryProfileTest`).
-4. Executar `mvn clean test`.
-5. Acionar o subagente `code-reviewer-sentinel-subagent` para homologação do Quality Gate.
+1. Atualizar [`BenchmarkTest.java`](file:///c:/git/fiap/phase4/leet-code/src/test/java/br/com/leetcode/support/benchmark/BenchmarkTest.java):
+   - Adicionar `maxMemoryBytes`, `failOnMemoryViolation`, `excludeWarmup` e `ansiColors`.
+2. Atualizar [`BenchmarkEntry.java`](file:///c:/git/fiap/phase4/leet-code/src/test/java/br/com/leetcode/support/benchmark/BenchmarkEntry.java):
+   - Suporte a status de violação de tempo e memória.
+3. Atualizar [`TestBenchmarkExtension.java`](file:///c:/git/fiap/phase4/leet-code/src/test/java/br/com/leetcode/support/benchmark/TestBenchmarkExtension.java):
+   - Implementar filtro de warmup, renderizador ANSI e avaliação de SLA de memória.
+4. Atualizar [`TestBenchmarkExtensionTest.java`](file:///c:/git/fiap/phase4/leet-code/src/test/java/br/com/leetcode/support/benchmark/TestBenchmarkExtensionTest.java):
+   - Adicionar casos de teste para SLA de memória, filtro de warmup e renderização ANSI.
+5. Executar `mvn clean test` para garantir que 100% dos testes continuem verdes.
+6. Submeter ao `code-reviewer-sentinel-subagent` para fechamento do Quality Gate.
