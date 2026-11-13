@@ -1,7 +1,10 @@
 package br.com.leetcode.problemset;
 
 import br.com.leetcode.support.benchmark.BenchmarkTest;
+import br.com.leetcode.support.memory.MemoryAllocation;
+import br.com.leetcode.support.memory.MemoryProfileTest;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -14,6 +17,19 @@ class P14LongestCommonPrefixTest {
     @BeforeEach
     void beforeEach() {
         p14LongestCommonPrefix = new P14LongestCommonPrefix();
+    }
+
+    @MemoryProfileTest(expectedAllocation = MemoryAllocation.CONSTANT, maxAllocatedBytes = 256)
+    @DisplayName("Should prove longestCommonPrefix maintains O(1) bounded heap allocation")
+    void measureMemoryAllocation() {
+        var strs = new String[] {
+                "interspecies",
+                "interstellar",
+                "interstate",
+                "interactive",
+                "intersection"
+        };
+        p14LongestCommonPrefix.longestCommonPrefix(strs);
     }
 
     @Test
@@ -36,5 +52,16 @@ class P14LongestCommonPrefixTest {
         // Then
         assertThat(actual)
                 .isEqualTo("");
+    }
+
+    @Test
+    void example3() {
+        // Given
+        var strs = new String[] {"ab","a"};
+        // When
+        var actual = p14LongestCommonPrefix.longestCommonPrefix(strs);
+        // Then
+        assertThat(actual)
+                .isEqualTo("a");
     }
 }

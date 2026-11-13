@@ -29,6 +29,28 @@ package br.com.leetcode.problemset;
 public class P14LongestCommonPrefix {
 
     public String longestCommonPrefix(String[] strs) {
-        return "";
+        char[] chars = null;
+        int maxLength = 0;
+        for (var s : strs) {
+            if (chars == null) {
+                chars = s.toCharArray();
+                maxLength = s.length();
+            } else {
+                if (maxLength > s.length())
+                    maxLength = s.length();
+
+                for (int i = maxLength - 1; i >= 0; i--) {
+                    if (chars[i] != s.charAt(i)) {
+                        chars[i] = ' ';
+                        maxLength = i;
+                    }
+                }
+            }
+        }
+
+        for (var i = maxLength; i < chars.length; i++)
+            chars[i] = ' ';
+
+        return new String(chars).trim();
     }
 }
